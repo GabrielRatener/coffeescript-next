@@ -16,6 +16,9 @@ addLocationDataFn, locationDataToString, throwSyntaxError} = require './helpers'
 exports.extend = extend
 exports.addLocationDataFn = addLocationDataFn
 
+String.prototype.contains = (sub)->
+  this.indexOf(sub) > -1
+
 # Constant functions for nodes that don't need customization.
 YES     = -> yes
 NO      = -> no
@@ -57,6 +60,12 @@ exports.Base = class Base
   compile: (o, lvl) ->
     fragmentsToText @compileToFragments o, lvl
 
+  # returns true if node compiles to one or
+  # more'yield' or 'yield*'
+  # based statements in JS
+  hasContinuations: ->
+    return no
+
   # Common logic for determining whether to wrap this node in a closure before
   # compiling it, or to compile directly. We need to wrap if this node is a
   # *statement*, and it's not a *pureStatement*, and we're not at
@@ -80,6 +89,8 @@ exports.Base = class Base
       jumpNode.error 'cannot use a pure statement in an expression'
     o.sharedScope = yes
     func = new Code [], Block.wrap [this]
+    func.closurify()
+    isGenerator = func.isGeneratorBased()
     args = []
     if (argumentsNode = @contains isLiteralArguments) or @contains isLiteralThis
       args = [new Literal 'this']
@@ -90,7 +101,7 @@ exports.Base = class Base
         meth = 'call'
       func = new Value func, [new Access new Literal meth]
     parts = (new Call func, args).compileNode o
-    if func.isGenerator
+    if isGenerator
       parts.unshift @makeCode "(yield* "
       parts.push    @makeCode ")"
     parts
@@ -222,6 +233,7 @@ exports.Base = class Base
 # indented block of code -- the implementation of a function, a clause in an
 # `if`, `switch`, or `try`, and so on...
 exports.Block = class Block extends Base
+
   constructor: (nodes) ->
     @expressions = compact flatten nodes or []
 
@@ -459,6 +471,65 @@ exports.Return = class Return extends Base
     answer.push @makeCode ";"
     return answer
 
+
+class Continuation extends Base
+  constructor: (expr) ->
+    @expression = expr if expr and not expr.unwrap().isUndefined
+
+  hasContinuations: ->
+    return yes
+
+  children: ['expression']
+
+exports.Await = class Await extends Continuation
+  compileNode: (o) ->
+    [@makeCode "(yield new #{utility 'await'}(#{@expression.compile o, LEVEL_PAREN}))"]
+
+
+exports.Yield = class Yield extends Continuation
+  compileNode: (o) ->
+    [@makeCode "(yield#{[" #{@expression.compile o, LEVEL_PAREN}" if @expression]})"]
+
+exports.YieldAll = class YieldAll extends Continuation
+  isStatement: YES
+  makeReturn: ->
+    throw new Error "yieldall is not an expression"
+
+  compileNode: (o) ->
+
+    sendvar = o.scope.freeVariable 'send'
+    resvar = o.scope.freeVariable 'result'
+    refvar = o.scope.freeVariable 'ref'
+
+    code  = "#{@tab}#{refvar} = #{[" #{@expression.compile o, LEVEL_PAREN}" if @expression]};\n"
+    code += "#{@tab}#{resvar} = {};\n"
+    code += "#{@tab}while(!#{resvar}.done) {\n"
+    code += "#{@tab + TAB}#{resvar} = #{refvar}.next(#{sendvar});\n"
+    code += "#{@tab + TAB}#{sendvar} = yield #{resvar}.value;\n"
+    code += "#{@tab}}"
+    return [@makeCode code]
+
+exports.YieldOn = class YieldOn extends Continuation
+  isStatement: YES
+  makeReturn: ->
+    throw new Error "yieldon is not an expression"
+
+  compileNode: (o) ->
+
+    sendvar = o.scope.freeVariable 'send'
+    resvar = o.scope.freeVariable 'result'
+    refvar = o.scope.freeVariable 'ref'
+    promvar = o.scope.freeVariable 'prom'
+
+    code  = "#{@tab}#{refvar} = #{[" #{@expression.compile o, LEVEL_PAREN}" if @expression]};\n"
+    code += "#{@tab}#{resvar} = {};\n"
+    code += "#{@tab}while(!#{resvar}.done) {\n"
+    code += "#{@tab + TAB}#{promvar} = #{refvar}.next(#{sendvar});\n"
+    code += "#{@tab + TAB}#{resvar} = yield new #{utility 'await'}(#{promvar});\n"
+    code += "#{@tab + TAB}#{sendvar} = yield #{resvar}.value;\n"
+    code += "#{@tab}}"
+    return [@makeCode code]
+
 #### Value
 
 # A value, variable or literal or parenthesized, indexed or dotted into,
@@ -580,7 +651,7 @@ exports.Comment = class Comment extends Base
   makeReturn:      THIS
 
   compileNode: (o, level) ->
-    comment = @comment.replace /^(\s*)# /gm, "$1 * "
+    comment = @comment.replace /^(\s*)#/gm, "$1 *"
     code = "/*#{multident comment, @tab}#{if '\n' in comment then "\n#{@tab}" else ''} */"
     code = o.indent + code if (level or o.level) is LEVEL_TOP
     [@makeCode("\n"), @makeCode(code)]
@@ -781,9 +852,9 @@ exports.Index = class Index extends Base
 # corresponding array of integers at runtime.
 exports.Range = class Range extends Base
 
-  children: ['from', 'to']
+  children: ['start', 'end']
 
-  constructor: (@from, @to, tag) ->
+  constructor: (@start, @end, tag) ->
     @exclusive = tag is 'exclusive'
     @equals = if @exclusive then '' else '='
 
@@ -793,8 +864,8 @@ exports.Range = class Range extends Base
   # But only if they need to be cached to avoid double evaluation.
   compileVariables: (o) ->
     o = merge o, top: true
-    [@fromC, @fromVar]  =  @cacheToCodeFragments @from.cache o, LEVEL_LIST
-    [@toC, @toVar]      =  @cacheToCodeFragments @to.cache o, LEVEL_LIST
+    [@fromC, @fromVar]  =  @cacheToCodeFragments @start.cache o, LEVEL_LIST
+    [@toC, @toVar]      =  @cacheToCodeFragments @end.cache o, LEVEL_LIST
     [@step, @stepVar]   =  @cacheToCodeFragments step.cache o, LEVEL_LIST if step = del o, 'step'
     [@fromNum, @toNum]  = [@fromVar.match(NUMBER), @toVar.match(NUMBER)]
     @stepNum            = @stepVar.match(NUMBER) if @stepVar
@@ -819,8 +890,8 @@ exports.Range = class Range extends Base
     condPart = if @stepNum
       if parseNum(@stepNum[0]) > 0 then "#{lt} #{@toVar}" else "#{gt} #{@toVar}"
     else if known
-      [from, to] = [parseNum(@fromNum[0]), parseNum(@toNum[0])]
-      if from <= to then "#{lt} #{to}" else "#{gt} #{to}"
+      [start, end] = [parseNum(@fromNum[0]), parseNum(@toNum[0])]
+      if start <= end then "#{lt} #{end}" else "#{gt} #{end}"
     else
       cond = if @stepVar then "#{@stepVar} > 0" else "#{@fromVar} <= #{@toVar}"
       "#{cond} ? #{lt} #{@toVar} : #{gt} #{@toVar}"
@@ -830,9 +901,9 @@ exports.Range = class Range extends Base
       "#{idx} += #{@stepVar}"
     else if known
       if namedIndex
-        if from <= to then "++#{idx}" else "--#{idx}"
+        if start <= end then "++#{idx}" else "--#{idx}"
       else
-        if from <= to then "#{idx}++" else "#{idx}--"
+        if start <= end then "#{idx}++" else "#{idx}--"
     else
       if namedIndex
         "#{cond} ? ++#{idx} : --#{idx}"
@@ -865,7 +936,7 @@ exports.Range = class Range extends Base
       body    = "var #{vars}; #{cond} ? #{i} <#{@equals} #{@toVar} : #{i} >#{@equals} #{@toVar}; #{cond} ? #{i}++ : #{i}--"
     post   = "{ #{result}.push(#{i}); }\n#{idt}return #{result};\n#{o.indent}"
     hasArgs = (node) -> node?.contains isLiteralArguments
-    args   = ', arguments' if hasArgs(@from) or hasArgs(@to)
+    args   = ', arguments' if hasArgs(@start) or hasArgs(@end)
     [@makeCode "(function() {#{pre}\n#{idt}for (#{body})#{post}}).apply(this#{args ? ''})"]
 
 #### Slice
@@ -884,11 +955,11 @@ exports.Slice = class Slice extends Base
   # `9e9` is used because not all implementations respect `undefined` or `1/0`.
   # `9e9` should be safe because `9e9` > `2**32`, the max array length.
   compileNode: (o) ->
-    {to, from} = @range
-    fromCompiled = from and from.compileToFragments(o, LEVEL_PAREN) or [@makeCode '0']
+    {start, end} = @range
+    fromCompiled = start and start.compileToFragments(o, LEVEL_PAREN) or [@makeCode '0']
     # TODO: jwalton - move this into the 'if'?
-    if to
-      compiled     = to.compileToFragments o, LEVEL_PAREN
+    if end
+      compiled     = end.compileToFragments o, LEVEL_PAREN
       compiledText = fragmentsToText compiled
       if not (not @range.exclusive and +compiledText is -1)
         toStr = ', ' + if @range.exclusive
@@ -896,7 +967,7 @@ exports.Slice = class Slice extends Base
         else if SIMPLENUM.test compiledText
           "#{+compiledText + 1}"
         else
-          compiled = to.compileToFragments o, LEVEL_ACCESS
+          compiled = end.compileToFragments o, LEVEL_ACCESS
           "+#{fragmentsToText compiled} + 1 || 9e9"
     [@makeCode ".slice(#{ fragmentsToText fromCompiled }#{ toStr or '' })"]
 
@@ -1291,24 +1362,24 @@ exports.Assign = class Assign extends Base
   # Compile the assignment from an array splice literal, using JavaScript's
   # `Array#splice` method.
   compileSplice: (o) ->
-    {range: {from, to, exclusive}} = @variable.properties.pop()
+    {range: {start, end, exclusive}} = @variable.properties.pop()
     name = @variable.compile o
-    if from
-      [fromDecl, fromRef] = @cacheToCodeFragments from.cache o, LEVEL_OP
+    if start
+      [fromDecl, fromRef] = @cacheToCodeFragments start.cache o, LEVEL_OP
     else
       fromDecl = fromRef = '0'
-    if to
-      if from instanceof Value and from.isSimpleNumber() and
-         to instanceof Value and to.isSimpleNumber()
-        to = to.compile(o) - fromRef
-        to += 1 unless exclusive
+    if end
+      if start instanceof Value and start.isSimpleNumber() and
+         end instanceof Value and end.isSimpleNumber()
+        end = end.compile(o) - fromRef
+        end += 1 unless exclusive
       else
-        to = to.compile(o, LEVEL_ACCESS) + ' - ' + fromRef
-        to += ' + 1' unless exclusive
+        end = end.compile(o, LEVEL_ACCESS) + ' - ' + fromRef
+        end += ' + 1' unless exclusive
     else
-      to = "9e9"
+      end = "9e9"
     [valDef, valRef] = @value.cache o, LEVEL_LIST
-    answer = [].concat @makeCode("[].splice.apply(#{name}, [#{fromDecl}, #{to}].concat("), valDef, @makeCode(")), "), valRef
+    answer = [].concat @makeCode("[].splice.apply(#{name}, [#{fromDecl}, #{end}].concat("), valDef, @makeCode(")), "), valRef
     if o.level > LEVEL_TOP then @wrapInBraces answer else answer
 
 #### Code
@@ -1318,17 +1389,34 @@ exports.Assign = class Assign extends Base
 # has no *children* -- they're within the inner scope.
 exports.Code = class Code extends Base
   constructor: (params, body, tag) ->
-    @params      = params or []
-    @body        = body or new Block
-    @bound       = tag is 'boundfunc'
-    @isGenerator = !!@body.contains (node) ->
-      node instanceof Op and node.operator in ['yield', 'yield*']
+    @params  = params or []
+    @body    = body or new Block
+    @bound      = tag? and tag.contains 'bound'
+    @generator  = tag? and tag.contains 'generator'
+    @async      = tag? and tag.contains 'async'
+    @stream     = tag? and tag.contains 'stream'
 
   children: ['params', 'body']
 
   isStatement: -> !!@ctor
 
   jumps: NO
+
+  # closures play by different rules
+  # than user defined functions
+  closurify: ->
+    @closure = yes
+    @generator = @body.contains (node) ->
+      node.hasContinuations()
+
+  isClosure: ->
+    @closure
+
+  isGeneratorClosure: ->
+    @closure and @generator
+
+  isGeneratorBased: ->
+    @generator or @async or @stream
 
   makeScope: (parentScope) -> new Scope parentScope, @body, this
 
@@ -1338,6 +1426,22 @@ exports.Code = class Code extends Base
   # arrow, generates a wrapper that saves the current value of `this` through
   # a closure.
   compileNode: (o) ->
+    if not @closure
+      # make sure the proper syntax rules are used for given
+      # functions
+      errend = " statement not allowed in this function type"
+      @body.traverseChildren no, (node) =>
+        if node.hasContinuations()
+          if node instanceof For and not (@async or @stream)
+            node.error "for-upon" + errend
+          if node instanceof Await and not (@async or @stream)
+            node.error "await" + errend
+          if node instanceof Yield and not (@generator or @stream)
+            node.error "yield" + errend
+          if node instanceof YieldOn and not @stream
+            node.error "yieldon" + errend
+          if node instanceof YieldAll and not (@stream or @generator)
+            node.error "yieldall" + errend
 
     if @bound and o.scope.method?.bound
       @context = o.scope.method.context
@@ -1389,17 +1493,20 @@ exports.Code = class Code extends Base
       node.error "multiple parameters named '#{name}'" if name in uniqs
       uniqs.push name
     @body.makeReturn() unless wasEmpty or @noReturn
-    code = 'function'
-    code += '*' if @isGenerator
-    code += ' ' + @name if @ctor
-    code += '('
+    code = ""
+    code  += "#{utility 'async'}(" if @async
+    code  += "#{utility 'stream'}(" if @stream
+    code  += 'function'
+    code  += '*' if @async or @generator or @stream
+    code  += ' ' + @name if @ctor
+    code  += '('
     answer = [@makeCode(code)]
     for p, i in params
       if i then answer.push @makeCode ", "
       answer.push p...
     answer.push @makeCode ') {'
     answer = answer.concat(@makeCode("\n"), @body.compileWithDeclarations(o), @makeCode("\n#{@tab}")) unless @body.isEmpty()
-    answer.push @makeCode '}'
+    answer.push @makeCode (if @async or @stream then '})' else '}')
 
     return [@makeCode(@tab), answer...] if @ctor
     if @front or (o.level >= LEVEL_ACCESS) then @wrapInBraces answer else answer
@@ -1618,10 +1725,9 @@ exports.Op = class Op extends Base
 
   # The map of conversions from CoffeeScript to JavaScript symbols.
   CONVERSIONS =
-    '==':        '==='
-    '!=':        '!=='
-    'of':        'in'
-    'yieldfrom': 'yield*'
+    '==': '==='
+    '!=': '!=='
+    'of': 'in'
 
   # The map of invertible operators.
   INVERSIONS =
@@ -1631,9 +1737,6 @@ exports.Op = class Op extends Base
   children: ['first', 'second']
 
   isSimpleNumber: NO
-
-  isYield: ->
-    @operator in ['yield', 'yield*']
 
   isUnary: ->
     not @second
@@ -1701,7 +1804,6 @@ exports.Op = class Op extends Base
       @error 'delete operand may not be argument or var'
     if @operator in ['--', '++'] and @first.unwrapAll().value in STRICT_PROSCRIBED
       @error "cannot increment/decrement \"#{@first.unwrapAll().value}\""
-    return @compileYield     o if @isYield()
     return @compileUnary     o if @isUnary()
     return @compileChain     o if isChain
     switch @operator
@@ -1754,19 +1856,6 @@ exports.Op = class Op extends Base
       @first = new Parens @first
     parts.push @first.compileToFragments o, LEVEL_OP
     parts.reverse() if @flip
-    @joinFragmentArrays parts, ''
-
-  compileYield: (o) ->
-    parts = []
-    op = @operator
-    if not o.scope.parent?
-      @error 'yield statements must occur within a function generator.'
-    if 'expression' in Object.keys @first
-      parts.push @first.expression.compileToFragments o, LEVEL_OP if @first.expression?
-    else
-      parts.push [@makeCode "(#{op} "]
-      parts.push @first.compileToFragments o, LEVEL_OP
-      parts.push [@makeCode ")"]
     @joinFragmentArrays parts, ''
 
   compilePower: (o) ->
@@ -1943,6 +2032,9 @@ exports.For = class For extends While
     @body    = Block.wrap [body]
     @own     = !!source.own
     @object  = !!source.object
+    @iterator= !!source.iterator
+    @stream  = !!source.stream
+
     [@name, @index] = [@index, @name] if @object
     @index.error 'index cannot be a pattern matching expression' if @index instanceof Value
     @range   = @source instanceof Value and @source.base instanceof Range and not @source.properties.length
@@ -1953,6 +2045,10 @@ exports.For = class For extends While
     @returns = false
 
   children: ['body', 'source', 'guard', 'step']
+
+  # contains continuation only if for-upon loop
+  hasContinuations: ->
+    return @stream
 
   # Welcome to the hairiest method in all of CoffeeScript. Handles the inner
   # loop, filtering, stepping, and result saving for array, object, and range
@@ -1969,7 +2065,7 @@ exports.For = class For extends While
     scope.find(name)  if name and not @pattern
     scope.find(index) if index
     rvar      = scope.freeVariable 'results' if @returns
-    ivar      = (@object and index) or scope.freeVariable 'i'
+    ivar      = ((@object or @iterator) and index) or scope.freeVariable 'i'
     kvar      = (@range and name) or index or ivar
     kvarAssign = if kvar isnt ivar then "#{kvar} = " else ""
     if @step and not @range
@@ -1979,7 +2075,10 @@ exports.For = class For extends While
     varPart   = ''
     guardPart = ''
     defPart   = ''
+    loopType  = if @stream then 'while' else 'for'
+    topPart   = ''
     idt1      = @tab + TAB
+
     if @range
       forPartFragments = source.compileToFragments merge(o, {index: ivar, name, @step})
     else
@@ -1987,9 +2086,9 @@ exports.For = class For extends While
       if (name or @own) and not IDENTIFIER.test svar
         defPart    += "#{@tab}#{ref = scope.freeVariable 'ref'} = #{svar};\n"
         svar       = ref
-      if name and not @pattern
+      if name and not (@pattern or @iterator or @stream)
         namePart   = "#{name} = #{svar}[#{kvar}]"
-      if not @object
+      unless @object or @iterator  or @stream
         defPart += "#{@tab}#{step};\n" if step isnt stepVar
         lvar = scope.freeVariable 'len' unless @step and stepNum and down = (parseNum(stepNum[0]) < 0)
         declare = "#{kvarAssign}#{ivar} = 0, #{lvar} = #{svar}.length"
@@ -2017,18 +2116,32 @@ exports.For = class For extends While
         body.expressions.unshift new If (new Parens @guard).invert(), new Literal "continue"
       else
         body = Block.wrap [new If @guard, body] if @guard
-    if @pattern
+    if @pattern and not (@iterator or @stream)
       body.expressions.unshift new Assign @name, new Literal "#{svar}[#{kvar}]"
     defPartFragments = [].concat @makeCode(defPart), @pluckDirectCall(o, body)
     varPart = "\n#{idt1}#{namePart};" if namePart
-    if @object
+
+    if @stream
+      wait = scope.freeVariable 'wait'
+
+      forPartFragments = [@makeCode("true")]
+      waitass = (new Assign (new Literal wait), new Await new Literal "#{svar}.next()").compile o, LEVEL_TOP
+      breaker = (new Literal "if(#{wait}.done) break;").compile o, LEVEL_TOP
+      assign = (new Assign @name, new Literal "#{wait}.value").compile o, LEVEL_TOP
+      topPart = "\n#{@tab + TAB}#{waitass}\n#{@tab + TAB}#{breaker}\n#{@tab + TAB}#{assign};"
+    else if @iterator
+      resultvar = scope.freeVariable 'result'
+      forPartFragments = [@makeCode("#{resultvar} of #{svar}")]
+      assign = (new Assign @name, new Literal "#{resultvar}").compile o, LEVEL_TOP
+      topPart = "\n#{@tab + TAB}#{assign};"
+    else if @object
       forPartFragments   = [@makeCode("#{kvar} in #{svar}")]
       guardPart = "\n#{idt1}if (!#{utility 'hasProp'}.call(#{svar}, #{kvar})) continue;" if @own
     bodyFragments = body.compileToFragments merge(o, indent: idt1), LEVEL_TOP
     if bodyFragments and (bodyFragments.length > 0)
       bodyFragments = [].concat @makeCode("\n"), bodyFragments, @makeCode("\n")
-    [].concat defPartFragments, @makeCode("#{resultPart or ''}#{@tab}for ("),
-      forPartFragments, @makeCode(") {#{guardPart}#{varPart}"), bodyFragments,
+    [].concat defPartFragments, @makeCode("#{resultPart or ''}#{@tab}#{loopType} ("),
+      forPartFragments, @makeCode(") {#{topPart}#{guardPart}#{varPart}"), bodyFragments,
       @makeCode("#{@tab}}#{returnResult or ''}")
 
   pluckDirectCall: (o, body) ->
@@ -2180,6 +2293,185 @@ exports.If = class If extends Base
 
 UTILITIES =
 
+  async: -> "
+    (function(){
+      var async = function(generator) {
+        return function() {
+          var args = arguments;
+          return new Promise(function(win, fail){
+            var tracker = new Tracker();
+            tracker.iterator = generator.apply(null, args);
+            tracker.win = win;
+            tracker.fail = fail;
+            tracker.tick();
+          });
+        };
+      };
+
+      function Tracker() {
+        var self = this;
+
+        this.thenHandle = function(value, err) {
+          if (!!err) {
+            self.fail(err);
+          } else {
+            self.result = value;
+            self.tick();
+          }
+        };
+
+        this.send     = false;
+        this.result   = undefined;
+
+        this.iterator = undefined;
+        this.win      = undefined;
+        this.fail     = undefined;
+      };
+
+      Tracker.prototype = {
+        tick: function() {
+          var next;
+          if (this.send) {
+            next = this.iterator.next(this.result);
+          } else {
+            next = this.iterator.next();
+            this.send = true;
+          }
+
+          if (next.done) {
+            this.win(next.value);
+          } else {
+            next.value.promise.then(this.thenHandle);
+          }
+        }
+      };
+
+      return async;
+    }())
+  "
+
+  stream: -> "
+    (function(){
+      var nextYield = function(iterator, value){
+        var bigWin, bigFail;
+
+        var next = function(result){
+          var prod = iterator.next(result);
+
+          if (prod.value instanceof #{utility 'await'}) {
+            prod.value.promise.then(next);
+          } else {
+            bigWin(prod);
+          }
+        };
+
+        return new Promise(function(win, fail){
+          bigWin = win;
+          bigFail = fail;
+          next(value);
+        });
+      };
+
+      function Action(complete, value){
+        this.value = undefined;
+        this.hasValue = (value !== undefined);
+        this.complete = complete;
+
+        if (this.hasValue){
+          this.value = value;
+        }
+      }
+
+      function Tracker(){
+        this.done = false;
+        this.running = false;
+        this.iterator = undefined;
+        this.actions = [];
+      }
+
+      Tracker.prototype = {
+        next: function(value) {
+          var self = this;
+          return new Promise(function(win, fail){
+            var action;
+            if (value === undefined){
+              action = new Action(win);
+            } else {
+              action = new Action(win, value);
+            }
+
+            self.actions.push(action);
+
+            if (!self.running){
+              self.proceed();
+            }
+          });
+        },
+        proceed: function() {
+
+          if (this.done){
+            this.terminate();
+            return;
+          } else {
+            var self = this;
+            var promise, action = this.actions.shift();
+            this.running = true;
+
+            if (action.hasValue) {
+              promise = nextYield(this.iterator, action.value);
+            } else {
+              promise = nextYield(this.iterator);
+            }
+
+            promise.then(function(value) {
+              if (value.done){
+                self.done = true;
+              }
+              action.complete(value);
+              if (self.actions.length === 0){
+                self.running = false;
+              } else {
+                self.proceed();
+              }
+            });
+          }
+        },
+        terminate: function(){
+          var end = {
+            value: undefined,
+            done: true
+          };
+          while (this.actions.length > 0) {
+            var action = this.actions.shift();
+            action.complete(end);
+          }
+        }
+      };
+
+      return function(gennerator){
+
+        return function(){
+          var tracker = new Tracker();
+          tracker.iterator = gennerator.apply(this, arguments);
+
+          return {
+            'next': function(value){
+              return tracker.next(value);
+            },
+            'throw': undefined
+          };
+        };
+      };
+    }())  
+"
+
+  await: -> "
+    function (promise){
+      this.promise = promise;
+      this.constructor = #{utility_encode 'await'};
+    }
+  "
+
   # Correctly set up a prototype chain for inheritance, including a reference
   # to the superclass for `super()` calls, and copies of any static properties.
   extends: -> "
@@ -2199,8 +2491,8 @@ UTILITIES =
 
   # Create a function bound to the current value of "this".
   bind: -> '
-    function(fn, me){
-      return function(){
+    function(fn, me) {
+      return function() {
         return fn.apply(me, arguments);
       };
     }
@@ -2261,9 +2553,12 @@ IS_REGEX = /^\//
 # Helper Functions
 # ----------------
 
+utility_encode = (name) ->
+  return "__#{name}"
+
 # Helper for ensuring that utility functions are assigned at the top level.
 utility = (name) ->
-  ref = "__#{name}"
+  ref = utility_encode name
   Scope.root.assign ref, UTILITIES[name]()
   ref
 

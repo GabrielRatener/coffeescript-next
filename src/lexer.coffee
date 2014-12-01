@@ -109,9 +109,6 @@ exports.Lexer = class Lexer
     if id is 'own' and @tag() is 'FOR'
       @token 'OWN', id
       return id.length
-    if id is 'from' and @tag() is 'YIELD'
-      @token 'FROM', id
-      return id.length
     forcedIdentifier = colon or
       (prev = last @tokens) and (prev[0] in ['.', '?.', '::', '?::'] or
       not prev.spaced and prev[0] is '@')
@@ -127,15 +124,14 @@ exports.Lexer = class Lexer
         tag = 'IF'
       else if tag in UNARY
         tag = 'UNARY'
+      else if @seenFor and tag in FOR_RELATION
+        tag = 'FOR' + tag
+        @seenFor = no
       else if tag in RELATION
-        if tag isnt 'INSTANCEOF' and @seenFor
-          tag = 'FOR' + tag
-          @seenFor = no
-        else
-          tag = 'RELATION'
-          if @value() is '!'
-            poppedToken = @tokens.pop()
-            id = '!' + id
+        tag = 'RELATION'
+        if @value() is '!'
+          poppedToken = @tokens.pop()
+          id = '!' + id
 
     if id in JS_FORBIDDEN
       if forcedIdentifier
@@ -691,7 +687,7 @@ exports.Lexer = class Lexer
   # Are we in the midst of an unfinished expression?
   unfinished: ->
     LINE_CONTINUER.test(@chunk) or
-    @tag() in ['\\', '.', '?.', '?::', 'UNARY', 'MATH', 'UNARY_MATH', '+', '-', 'YIELD',
+    @tag() in ['\\', '.', '?.', '?::', 'UNARY', 'MATH', 'UNARY_MATH', '+', '-', 'AWAIT',
                '**', 'SHIFT', 'RELATION', 'COMPARE', 'LOGIC', 'THROW', 'EXTENDS']
 
   # Remove newlines from beginning and (non escaped) from end of string literals.
@@ -738,7 +734,7 @@ JS_KEYWORDS = [
 ]
 
 # CoffeeScript-only keywords.
-COFFEE_KEYWORDS = ['undefined', 'then', 'unless', 'until', 'loop', 'of', 'by', 'when']
+COFFEE_KEYWORDS = ['await', 'undefined', 'then', 'unless', 'until', 'loop', 'of', 'by', 'from', 'upon', 'when', 'yieldon', 'yieldall']
 
 COFFEE_ALIAS_MAP =
   and  : '&&'
@@ -759,7 +755,7 @@ COFFEE_KEYWORDS = COFFEE_KEYWORDS.concat COFFEE_ALIASES
 # to avoid having a JavaScript error at runtime.
 RESERVED = [
   'case', 'default', 'function', 'var', 'void', 'with', 'const', 'let', 'enum'
-  'export', 'import', 'native', '__hasProp', '__extends', '__slice', '__bind'
+  'export', 'import', 'native', '__hasProp', '__await', '__async', '__stream', '__extends', '__slice', '__bind'
   '__indexOf', 'implements', 'interface', 'package', 'private', 'protected'
   'public', 'static'
 ]
@@ -792,7 +788,7 @@ NUMBER     = ///
 HEREDOC    = /// ^ ("""|''') ((?: \\[\s\S] | [^\\] )*?) (?:\n[^\n\S]*)? \1 ///
 
 OPERATOR   = /// ^ (
-  ?: [-=]>             # function
+  ?: [-=]>[>\*\~]?     # function
    | [-+*/%<>&|^!?=]=  # compound assign / compare
    | >>>=?             # zero-fill right shift
    | ([-+:])\1         # doubles
@@ -805,7 +801,7 @@ WHITESPACE = /^[^\n\S]+/
 
 COMMENT    = /^###([^#][\s\S]*?)(?:###[^\n\S]*|###$)|^(?:\s*#(?!##[^#]).*)+/
 
-CODE       = /^[-=]>/
+CODE       = /^[-=]>[>\*\~]?/
 
 MULTI_DENT = /^(?:\n[^\n\S]*)+/
 
@@ -872,6 +868,8 @@ MATH = ['*', '/', '%', '//', '%%']
 
 # Relational tokens that are negatable with `not` prefix.
 RELATION = ['IN', 'OF', 'INSTANCEOF']
+
+FOR_RELATION = ['IN', 'OF', 'FROM', 'UPON']
 
 # Boolean tokens.
 BOOL = ['TRUE', 'FALSE']

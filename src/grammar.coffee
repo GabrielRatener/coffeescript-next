@@ -93,6 +93,8 @@ grammar =
   Statement: [
     o 'Return'
     o 'Comment'
+    o 'YieldAll'
+    o 'YieldOn'
     o 'STATEMENT',                              -> new Literal $1
   ]
 
@@ -101,6 +103,7 @@ grammar =
   # is one. Blocks serve as the building blocks of many other rules, making
   # them somewhat circular.
   Expression: [
+    o 'Await'
     o 'Value'
     o 'Invocation'
     o 'Code'
@@ -113,6 +116,7 @@ grammar =
     o 'Switch'
     o 'Class'
     o 'Throw'
+    o 'Yield'
   ]
 
   # An indented block of expressions. Note that the [Rewriter](rewriter.html)
@@ -176,6 +180,26 @@ grammar =
     o 'RETURN',                                 -> new Return
   ]
 
+  Await: [
+    o 'AWAIT Expression',                       -> new Await $2
+  ]
+
+  # A yield keyword from a generator function body.
+  Yield: [
+    o 'YIELD Expression',                      -> new Yield $2
+    o 'YIELD',                                 -> new Yield
+  ]
+
+  # A yieldall statement from a generator function body.
+  YieldAll: [
+    o 'YIELDALL Expression',                    -> new YieldAll $2
+  ]
+
+  YieldOn: [
+    o 'YIELDON Expression',                     -> new YieldOn $2
+  ]
+
+
   # A block comment.
   Comment: [
     o 'HERECOMMENT',                            -> new Comment $1
@@ -194,6 +218,12 @@ grammar =
   FuncGlyph: [
     o '->',                                     -> 'func'
     o '=>',                                     -> 'boundfunc'
+    o '->*',                                    -> 'generator'
+    o '=>*',                                    -> 'boundgenerator'
+    o '->~',                                    -> 'async'
+    o '=>~',                                    -> 'boundasync'
+    o '->>',                                    -> 'stream'
+    o '=>>',                                    -> 'boundstream'
   ]
 
   # An optional, trailing comma.
@@ -483,8 +513,12 @@ grammar =
   ForSource: [
     o 'FORIN Expression',                               -> source: $2
     o 'FOROF Expression',                               -> source: $2, object: yes
+    o 'FORFROM Expression',                             -> source: $2, iterator: yes
+    o 'FORUPON Expression',                             -> source: $2, stream: yes
     o 'FORIN Expression WHEN Expression',               -> source: $2, guard: $4
     o 'FOROF Expression WHEN Expression',               -> source: $2, guard: $4, object: yes
+    o 'FORFROM Expression WHEN Expression',             -> source: $2, guard: $4, iterator: yes
+    o 'FORUPON Expression WHEN Expression',             -> source: $2, guard: $4, stream: yes
     o 'FORIN Expression BY Expression',                 -> source: $2, step:  $4
     o 'FORIN Expression WHEN Expression BY Expression', -> source: $2, guard: $4, step: $6
     o 'FORIN Expression BY Expression WHEN Expression', -> source: $2, step:  $4, guard: $6
@@ -536,9 +570,6 @@ grammar =
     o 'UNARY_MATH Expression',                  -> new Op $1 , $2
     o '-     Expression',                      (-> new Op '-', $2), prec: 'UNARY_MATH'
     o '+     Expression',                      (-> new Op '+', $2), prec: 'UNARY_MATH'
-    o 'YIELD Statement',                        -> new Op $1 , $2
-    o 'YIELD Expression',                       -> new Op $1 , $2
-    o 'YIELD FROM Expression',                  -> new Op $1.concat($2) , $3
 
     o '-- SimpleAssignable',                    -> new Op '--', $2
     o '++ SimpleAssignable',                    -> new Op '++', $2
@@ -589,6 +620,7 @@ operators = [
   ['nonassoc',  '++', '--']
   ['left',      '?']
   ['right',     'UNARY']
+  ['right',     'AWAIT']
   ['right',     '**']
   ['right',     'UNARY_MATH']
   ['left',      'MATH']
@@ -599,8 +631,8 @@ operators = [
   ['left',      'LOGIC']
   ['nonassoc',  'INDENT', 'OUTDENT']
   ['right',     'YIELD']
-  ['right',     '=', ':', 'COMPOUND_ASSIGN', 'RETURN', 'THROW', 'EXTENDS']
-  ['right',     'FORIN', 'FOROF', 'BY', 'WHEN']
+  ['right',     '=', ':', 'COMPOUND_ASSIGN', 'YIELDALL', 'YIELDON', 'RETURN', 'THROW', 'EXTENDS']
+  ['right',     'FORUPON', 'FORFROM', 'FORIN', 'FOROF', 'BY', 'WHEN']
   ['right',     'IF', 'ELSE', 'FOR', 'WHILE', 'UNTIL', 'LOOP', 'SUPER', 'CLASS']
   ['left',      'POST_IF']
 ]
