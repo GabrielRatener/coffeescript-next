@@ -281,6 +281,8 @@ runTests = (CoffeeScript) ->
   generatorsAreAvailable = '--harmony' in process.execArgv or
     '--harmony-generators' in process.execArgv
   files.splice files.indexOf('generators.coffee'), 1 if not generatorsAreAvailable
+  files.splice files.indexOf('async.coffee'), 1 if not generatorsAreAvailable
+  files.splice files.indexOf('stream.coffee'), 1 if not generatorsAreAvailable
 
   for file in files when helpers.isCoffee file
     literate = helpers.isLiterate file
