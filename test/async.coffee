@@ -1,3 +1,4 @@
+global.Promise = require "./importing/promise.js"
 
 winning = (val)->
 	return new Promise (win, fail)->
@@ -27,6 +28,7 @@ test "async definition", ->
 	eq a.constructor, Promise
 
 test "async return type", ->
+	out = undefined
 	a = ->~
 		x = await winning(5)
 		y = await winning(4)
@@ -35,9 +37,12 @@ test "async return type", ->
 
 	do ->~
 		out = await a()
-		arrayEq out, [5, 4, 3]
+	arrayEq out, [5, 4, 3]
 
-test "boud async", ->
+test "bound async", ->
+	bnd = undefined
+	ubnd = undefined
+	nst = undefined
 	obj = 
 		bound: ->
 			return do =>~
@@ -52,10 +57,13 @@ test "boud async", ->
 						return this
 
 	do ->~
-		eq await bound(), obj
-		ok await unbound() isnt obj
+		bnd = await obj.bound()
+		ubnd = await obj.unbound()
+		nst = await obj.nested()
 
-		eq await nested(), obj
+	eq bnd, obj
+	ok ubnd isnt obj
+	eq nst, obj
 
 
 

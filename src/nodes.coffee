@@ -501,12 +501,7 @@ exports.YieldAll = class YieldAll extends Continuation
     resvar = o.scope.freeVariable 'result'
     refvar = o.scope.freeVariable 'ref'
 
-    code  = "#{@tab}#{refvar} = #{[" #{@expression.compile o, LEVEL_PAREN}" if @expression]};\n"
-    code += "#{@tab}#{resvar} = {};\n"
-    code += "#{@tab}while(!#{resvar}.done) {\n"
-    code += "#{@tab + TAB}#{resvar} = #{refvar}.next(#{sendvar});\n"
-    code += "#{@tab + TAB}#{sendvar} = yield #{resvar}.value;\n"
-    code += "#{@tab}}"
+    code = "yield* (#{[" #{@expression.compile o, LEVEL_PAREN}" if @expression]})"
     return [@makeCode code]
 
 exports.YieldOn = class YieldOn extends Continuation
@@ -523,9 +518,10 @@ exports.YieldOn = class YieldOn extends Continuation
 
     code  = "#{@tab}#{refvar} = #{[" #{@expression.compile o, LEVEL_PAREN}" if @expression]};\n"
     code += "#{@tab}#{resvar} = {};\n"
-    code += "#{@tab}while(!#{resvar}.done) {\n"
+    code += "#{@tab}while(true) {\n"
     code += "#{@tab + TAB}#{promvar} = #{refvar}.next(#{sendvar});\n"
     code += "#{@tab + TAB}#{resvar} = yield new #{utility 'await'}(#{promvar});\n"
+    code += "#{@tab + TAB}if(#{resvar}.done) break;\n"
     code += "#{@tab + TAB}#{sendvar} = yield #{resvar}.value;\n"
     code += "#{@tab}}"
     return [@makeCode code]
@@ -651,7 +647,7 @@ exports.Comment = class Comment extends Base
   makeReturn:      THIS
 
   compileNode: (o, level) ->
-    comment = @comment.replace /^(\s*)#/gm, "$1 *"
+    comment = @comment.replace /^(\s*)# /gm, "$1 * " 
     code = "/*#{multident comment, @tab}#{if '\n' in comment then "\n#{@tab}" else ''} */"
     code = o.indent + code if (level or o.level) is LEVEL_TOP
     [@makeCode("\n"), @makeCode(code)]
@@ -2297,10 +2293,10 @@ UTILITIES =
     (function(){
       var async = function(generator) {
         return function() {
-          var args = arguments;
+          var args = arguments, self = this;
           return new Promise(function(win, fail){
             var tracker = new Tracker();
-            tracker.iterator = generator.apply(null, args);
+            tracker.iterator = generator.apply(self, args);
             tracker.win = win;
             tracker.fail = fail;
             tracker.tick();
@@ -2311,13 +2307,13 @@ UTILITIES =
       function Tracker() {
         var self = this;
 
-        this.thenHandle = function(value, err) {
-          if (!!err) {
-            self.fail(err);
-          } else {
-            self.result = value;
-            self.tick();
-          }
+        this.thenHandle = function(value) {
+          self.result = value;
+          self.tick();
+        };
+
+        this.failHandle = function(value) {
+          self.fail(value);
         };
 
         this.send     = false;
@@ -2341,7 +2337,7 @@ UTILITIES =
           if (next.done) {
             this.win(next.value);
           } else {
-            next.value.promise.then(this.thenHandle);
+            next.value.promise.then(this.thenHandle, this.failHandle);
           }
         }
       };
@@ -2462,7 +2458,7 @@ UTILITIES =
           };
         };
       };
-    }())  
+    }())
 "
 
   await: -> "

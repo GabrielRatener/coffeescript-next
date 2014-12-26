@@ -1,3 +1,4 @@
+global.Promise = require "./importing/promise.js"
 
 winning = (val)->
 	return new Promise (win, fail)->
@@ -30,6 +31,7 @@ test "stream definition", ->
 	ok a.next?
 
 test "stream yielding and return", ->
+	ob = {}
 	a = do ->>
 		x = await winning(5)
 		yield x
@@ -39,19 +41,20 @@ test "stream yielding and return", ->
 		yield z
 
 	do ->~
-		x = await a.next()
-		y = await a.next()
-		z = await a.next()
+		ob.x = await a.next()
+		ob.y = await a.next()
+		ob.z = await a.next()
+		ob.val = await a.next()
 
-		eq x.value, 5
-		eq y.value, 4
-		eq z.value, 3
+	eq ob.x.value, 5
+	eq ob.y.value, 4
+	eq ob.z.value, 3
 
-		val = await a.next()
-		ok not val.value?
-		ok not val.hasNext
+	ok not ob.val.value?
+	ok not ob.val.hasNext
 
 test "bound streams", ->
+	ob = {}
 	obj = 
 		bound: ->
 			return do =>>
@@ -66,20 +69,21 @@ test "bound streams", ->
 						yield this
 
 	do ->~
-		a = await bound().next()
-		eq a.value, obj
+		ob.aa = await obj.bound().next()
 
-		b = await unbound().next()
-		ok b.value isnt obj
+		ob.bb = await obj.unbound().next()
 
-		gen = nested()
-		a = await gen.next()
-		b = await a.value.next()
-		c = await b.value.next()
+		gen = obj.nested()
+		ob.a = await gen.next()
+		ob.b = await ob.a.value.next()
+		ob.c = await ob.b.value.next()
 
-		eq c, obj
+	eq ob.aa.value, obj
+	ok ob.bb.value isnt obj
+	eq ob.c, obj
 
 test "for upon statement", ->
+	arr = undefined
 	a = do ->>
 		x = await winning(5)
 		yield x
@@ -92,9 +96,10 @@ test "for upon statement", ->
 		arr = []
 		for n upon a
 			arr.push n
-		arraEq arr, [5, 4, 3]
+	arrayEq arr, [5, 4, 3]
 
 test "for upon expression", ->
+	arr = undefined
 	a = do ->>
 		x = await winning(5)
 		yield x
@@ -106,9 +111,10 @@ test "for upon expression", ->
 	do ->~
 		arr = for n upon a
 			n
-		arraEq arr, [5, 4, 3]
+	arrayEq arr, [5, 4, 3]
 
 test "yieldon", ->
+	ob = {}
 	a = do ->>
 		x = await winning(5)
 		yield x
@@ -122,17 +128,17 @@ test "yieldon", ->
 		return
 
 	do ->~
-		x = await b.next()
-		y = await b.next()
-		z = await b.next()
+		ob.x = await b.next()
+		ob.y = await b.next()
+		ob.z = await b.next()
+		ob.val = await b.next()
 
-		eq x.value, 5
-		eq y.value, 4
-		eq z.value, 3
+	eq ob.x.value, 5
+	eq ob.y.value, 4
+	eq ob.z.value, 3
 
-		val = await b.next()
-		ok not val.value?
-		ok not val.hasNext
+	ok not ob.val.value?
+	ok not ob.val.hasNext
 
 
 

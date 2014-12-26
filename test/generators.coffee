@@ -46,19 +46,26 @@ test "error if `yieldall` occurs outside of a function", ->
 
 test "`yieldall` support", ->
   x = do ->*
+    arr = []
     yieldall do ->*
-      yield i for i in [3..4]
+      for i in [1..3]
+        a = yield i 
+        arr.push a * i
       return
-    return
+    return arr
 
   y = x.next()
-  ok y.value is 3 and not y.done
+  ok y.value is 1 and not y.done
 
   y = x.next 1
-  ok y.value is 4 and not y.done
+  ok y.value is 2 and not y.done
 
   y = x.next 2
-  arrayEq y.value, [1, 2]
+  ok y.value is 3 and not y.done
+
+  y = x.next 2
+
+  arrayEq y.value, [1, 4, 6]
   ok y.done is true
 
 test "yield in if statements", ->
@@ -124,8 +131,12 @@ test "for from statement", ->
 
   arr = []
   for i from x
-    arr.push i
-  arrayEq arr, [1, 2, 3, 4]
+    a = i * i
+    b = a + 1
+    arr.push b
+
+  arrayEq arr, [2, 5, 10, 17]
+  return
 
 test "for from expression", ->
   x = do ->*
