@@ -2340,7 +2340,7 @@ UTILITIES =
           if (next.done) {
             this.win(next.value);
           } else {
-            next.value.then(this.thenHandle, this.failHandle);
+            next.value.promise.then(this.thenHandle, this.failHandle);
           }
         }
       };
