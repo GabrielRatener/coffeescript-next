@@ -2289,6 +2289,7 @@ exports.If = class If extends Base
 
 UTILITIES =
 
+  # for async functions
   async: -> "
     (function(){
       var async = function(generator) {
@@ -2312,11 +2313,13 @@ UTILITIES =
           self.tick();
         };
 
-        this.failHandle = function(value) {
-          self.fail(value);
+        this.failHandle = function(err) {
+          self.result = err;
+          self.throw = true;
+          self.tick();
         };
 
-        this.send     = false;
+        this.throw    = false;
         this.result   = undefined;
 
         this.iterator = undefined;
@@ -2327,24 +2330,24 @@ UTILITIES =
       Tracker.prototype = {
         tick: function() {
           var next;
-          if (this.send) {
-            next = this.iterator.next(this.result);
+          if (this.throw) {
+            next = this.iterator.throw(this.result);
+            this.throw = false;
           } else {
-            next = this.iterator.next();
-            this.send = true;
+            next = this.iterator.next(this.result);
           }
 
           if (next.done) {
             this.win(next.value);
           } else {
-            next.value.promise.then(this.thenHandle, this.failHandle);
+            next.value.then(this.thenHandle, this.failHandle);
           }
         }
       };
 
       return async;
     }())
-  "
+  " 
 
   stream: -> "
     (function(){
