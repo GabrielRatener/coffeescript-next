@@ -1,4 +1,4 @@
-global.Promise = require "./importing/promise.js"
+GLOBAL.Promise = require "./promise.js"
 
 winning = (val)->
 	return new Promise (win, fail)->

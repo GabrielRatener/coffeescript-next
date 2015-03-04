@@ -1,4 +1,4 @@
-global.Promise = require "./importing/promise.js"
+GLOBAL.Promise = require "./promise.js"
 
 winning = (val)->
 	return new Promise (win, fail)->
@@ -54,33 +54,53 @@ test "stream yielding and return", ->
 	ok not ob.val.hasNext
 
 test "bound streams", ->
-	ob = {}
-	obj = 
-		bound: ->
-			return do =>>
-				yield this
-		unbound: ->
-			return do ->>
-				yield this
-		nested: ->
-			return do =>>
-				yield do =>>
-					yield do =>>
-						yield this
+	ob1 = {
+		clam: 2
+	}
+
+	ob1.fn = ()->
+		ob2 = {
+			clam: 5
+			bound: (param)=>>
+				a = await winning(@clam)
+				yield a + a
+				b = await winning(param)
+				yield b + b
+				return @
+			unbound: ()->>
+				a = await winning(@clam)
+				yield a + a
+				b = await winning(3)
+				yield b + b
+				return @
+		}
+
+		return ob2
 
 	do ->~
-		ob.aa = await obj.bound().next()
+		ob2 = ob1.fn()
 
-		ob.bb = await obj.unbound().next()
 
-		gen = obj.nested()
-		ob.a = await gen.next()
-		ob.b = await ob.a.value.next()
-		ob.c = await ob.b.value.next()
+		bnd = ob2.bound(3)
+		v1 = await bnd.next()
+		v2 = await bnd.next()
+		v3 = await bnd.next()
+		eq v1.value, 4
+		eq v2.value, 6
+		eq v3.value, ob1
+		ok v3.done
 
-	eq ob.aa.value, obj
-	ok ob.bb.value isnt obj
-	eq ob.c, obj
+		ubnd = ob2.unbound()
+		v1 = await ubnd.next()
+		v2 = await ubnd.next()
+		v3 = await ubnd.next()
+		eq v1.value, 10
+		eq v2.value, 6
+		eq v3.value, ob2
+		ok v3.done
+
+
+
 
 test "for upon statement", ->
 	arr = undefined

@@ -2290,179 +2290,76 @@ exports.If = class If extends Base
 UTILITIES =
 
   # for async functions
+  # based on Anatoly Ressin's proposal
   async: -> "
-    (function(){
-      var async = function(generator) {
-        return function() {
-          var args = arguments, self = this;
-          return new Promise(function(win, fail){
-            var tracker = new Tracker();
-            tracker.iterator = generator.apply(self, args);
-            tracker.win = win;
-            tracker.fail = fail;
-            tracker.tick();
-          });
-        };
-      };
-
-      function Tracker() {
-        var self = this;
-
-        this.thenHandle = function(value) {
-          self.result = value;
-          self.tick();
-        };
-
-        this.failHandle = function(err) {
-          self.result = err;
-          self.throw = true;
-          self.tick();
-        };
-
-        this.throw    = false;
-        this.result   = undefined;
-
-        this.iterator = undefined;
-        this.win      = undefined;
-        this.fail     = undefined;
-      };
-
-      Tracker.prototype = {
-        tick: function() {
-          var next;
-          if (this.throw) {
-            next = this.iterator.throw(this.result);
-            this.throw = false;
-          } else {
-            next = this.iterator.next(this.result);
-          }
-
-          if (next.done) {
-            this.win(next.value);
-          } else {
-            next.value.promise.then(this.thenHandle, this.failHandle);
+    function (fn) {
+      return function () {
+        function resolved(res) { return next(gen.next(res)); }
+        function rejected(err) { return next(gen.throw(err)); }
+        function next(ret) {
+          var val = ret.value;
+          if (ret.done) {
+            return Promise.resolve(val);
+          } else try {
+            return val.promise.then(resolved, rejected);
+          } catch (_) {
+            throw new Error('Expected Awaitable');
           }
         }
+        
+        var gen = fn.apply(this, arguments);
+        try {
+          return resolved();
+        } catch (e) {
+          return Promise.reject(e);
+        }
       };
-
-      return async;
-    }())
+    }
   " 
 
   stream: -> "
-    (function(){
-      var nextYield = function(iterator, value){
-        var bigWin, bigFail;
-
-        var next = function(result){
-          var prod = iterator.next(result);
-
-          if (prod.value instanceof #{utility 'await'}) {
-            prod.value.promise.then(next);
-          } else {
-            bigWin(prod);
+    function(fn){
+      return function(){
+        function nextValue(value){
+          function resolved(res) { return next(gen.next(res)); }
+          function rejected(err) { return next(gen.throw(err)); }
+          function next(ret) {
+            var val = ret.value;
+            if (val instanceof #{utility 'await'}){
+              try {
+                return val.promise.then(resolved, rejected);
+              } catch (_) {
+                throw new Error('Expected Promise/A+');
+              }
+            } else {
+              resolving = false;
+              return Promise.resolve(ret);
+            }
           }
-        };
 
-        return new Promise(function(win, fail){
-          bigWin = win;
-          bigFail = fail;
-          next(value);
-        });
-      };
-
-      function Action(complete, value){
-        this.value = undefined;
-        this.hasValue = (value !== undefined);
-        this.complete = complete;
-
-        if (this.hasValue){
-          this.value = value;
+          try {
+            resolving = true;
+            return resolved(value);
+          } catch (e) {
+            return Promise.reject(e);
+          }
         }
-      }
 
-      function Tracker(){
-        this.done = false;
-        this.running = false;
-        this.iterator = undefined;
-        this.actions = [];
-      }
+        var gen = fn.apply(this, arguments);
+        var resolving = false;
 
-      Tracker.prototype = {
-        next: function(value) {
-          var self = this;
-          return new Promise(function(win, fail){
-            var action;
-            if (value === undefined){
-              action = new Action(win);
+        return {
+          next: function(value){
+            if (resolving) {
+              throw new Error('Value not finished resolving');
             } else {
-              action = new Action(win, value);
+              return nextValue(value);
             }
-
-            self.actions.push(action);
-
-            if (!self.running){
-              self.proceed();
-            }
-          });
-        },
-        proceed: function() {
-
-          if (this.done){
-            this.terminate();
-            return;
-          } else {
-            var self = this;
-            var promise, action = this.actions.shift();
-            this.running = true;
-
-            if (action.hasValue) {
-              promise = nextYield(this.iterator, action.value);
-            } else {
-              promise = nextYield(this.iterator);
-            }
-
-            promise.then(function(value) {
-              if (value.done){
-                self.done = true;
-              }
-              action.complete(value);
-              if (self.actions.length === 0){
-                self.running = false;
-              } else {
-                self.proceed();
-              }
-            });
-          }
-        },
-        terminate: function(){
-          var end = {
-            value: undefined,
-            done: true
-          };
-          while (this.actions.length > 0) {
-            var action = this.actions.shift();
-            action.complete(end);
           }
         }
       };
-
-      return function(gennerator){
-
-        return function(){
-          var tracker = new Tracker();
-          tracker.iterator = gennerator.apply(this, arguments);
-
-          return {
-            'next': function(value){
-              return tracker.next(value);
-            },
-            'throw': undefined
-          };
-        };
-      };
-    }())
-"
+    }
+  "
 
   await: -> "
     function (promise){
