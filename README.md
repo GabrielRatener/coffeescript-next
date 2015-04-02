@@ -22,7 +22,7 @@ CoffeeScript-next is a non-backwards compatible fork of CoffeeScript that utiliz
 
 ## New Syntax
 
-# Async Function
+### Async Function
 
 Use `->~` to make the function async:
 
@@ -34,7 +34,7 @@ my_async_fn = () ->~
 
 Invoking Async functions always returns a promise.
 
-# Generator Functions
+### Generator Functions
 
 use `->*` to turn the function into a generator function:
 
@@ -47,7 +47,7 @@ my_generator_fn = () ->*
 
 Generator functions compile down to ES6 generators, with `yield` having the same meaning as in ES6.
 
-# Async Generator Functions
+### Async Generator Functions
 
 use `->>` to make the function into an async generator function:
 
@@ -62,7 +62,7 @@ my_async_generator_fn = () ->>
 
 Calling such a function returns an async iterator, which can be used by a for-upon loop (see below)
 
-# For-from Loops
+### For-from Loops
 
 ```Coffeescript
 my_generator_fn = () ->*
@@ -82,7 +82,7 @@ prints:
 
 For-from loops can be used to iterate over any object that properly implements the iterable spec.
 
-# For-upon loops
+### For-upon loops
 
 ```Coffeescript
 my_async_generator_fn = () ->>
@@ -106,7 +106,7 @@ prints:
 
 A for upon loop iterates through the values yielded by an async generator.
 
-# The `yieldall` Keyword
+### The `yieldall` Keyword
 
 `yieldall` is syntactically equivalent to `yield*` in ES6 except that it cannot be evaluated as an expression (working on that):
 
@@ -133,7 +133,7 @@ prints:
 ###
 ```
 
-# The `yieldon` Keyword
+### The `yieldon` Keyword
 
 A `yieldall` analog for delegating to async generators
 
